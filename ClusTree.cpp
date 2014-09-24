@@ -2,8 +2,17 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <sys/time.h>
+#include <unistd.h>
+#include <cstdlib>
 
 using namespace std;
+
+#define LAMBDA 0.00001
+#define BETA 2
+#define NUMINSERTS 300
+
+int points = 0;
 
 class Point
 {
@@ -43,6 +52,16 @@ class CF
 			this->lsy = lsy;
 			this->ssx = ssx;
 			this->ssy = ssy;
+			this->timestamp = timestamp;
+		}
+
+		void update(int timestamp)
+		{
+			this->n *= pow(BETA,-LAMBDA*(timestamp - this->timestamp));
+			this->lsx *= pow(BETA,-LAMBDA*(timestamp - this->timestamp));
+			this->lsy *= pow(BETA,-LAMBDA*(timestamp - this->timestamp));
+			this->ssx *= pow(BETA,-LAMBDA*(timestamp - this->timestamp));
+			this->ssy *= pow(BETA,-LAMBDA*(timestamp - this->timestamp));
 			this->timestamp = timestamp;
 		}
 
@@ -94,7 +113,7 @@ class Node
 			this->size++;
 		}
 
-		CF* getCF()
+		CF* getCF(int newtimestamp)
 		{
 			double n = 0.0, lsx = 0.0, lsy = 0.0, ssx = 0.0, ssy = 0.0;
 			for(int i = 0; i < this->size; i++)
@@ -107,7 +126,7 @@ class Node
 			}
 
 			// TODO: Check timestamp
-			return new CF(n, lsx, lsy, ssx, ssy, 0);
+			return new CF(n, lsx, lsy, ssx, ssy, newtimestamp);
 		}
 
 };
@@ -116,6 +135,7 @@ class ClusTree
 {
 	int m, M, l, L;
 	Node *root;
+	int deltaT, lastpointtime;
 	public:
 		ClusTree(int m, int M, int l, int L)
 		{
@@ -124,6 +144,8 @@ class ClusTree
 			this->l = l;
 			this->L = L;
 			this->root = NULL;
+			this->deltaT = 0;
+			this->lastpointtime = 0;
 		}
 
 		double getDistance(Point *p, CF *cf)
@@ -182,7 +204,7 @@ class ClusTree
 				positions[k] = positions[k-1]+1;
 		}
 
-		void split(Node *node, int parentCFpos)
+		void split(Node *node, int parentCFpos, int newtimestamp)
 		{
 			//cout<<"Splitting "<<node->getCF()->lsx<<" "<<node->getCF()->lsy<<"\n";
 			vector<int> bestgroup1, bestgroup2;
@@ -224,11 +246,19 @@ class ClusTree
 				n1 = new Node(this->root, m, M, l, L, node->isleaf);
 				n2 = new Node(this->root, m, M, l, L, node->isleaf);
 				for(int i = 0; i < bestgroup1.size(); i++)
+				{
 					n1->addCF(node->cf[bestgroup1[i]], node->child[bestgroup1[i]]);
+					if (node->child[bestgroup1[i]])
+						node->child[bestgroup1[i]]->parent = n1;
+				}
 				for(int i = 0; i < bestgroup2.size(); i++)
+				{
 					n2->addCF(node->cf[bestgroup2[i]], node->child[bestgroup2[i]]);
-				this->root->addCF(n1->getCF(), n1);
-				this->root->addCF(n2->getCF(), n2);
+					if (node->child[bestgroup2[i]])
+						node->child[bestgroup2[i]]->parent = n2;
+				}
+				this->root->addCF(n1->getCF(newtimestamp), n1);
+				this->root->addCF(n2->getCF(newtimestamp), n2);
 				delete node;
 			}
 			else
@@ -237,32 +267,61 @@ class ClusTree
 				n1 = new Node(node->parent, m, M, l, L, node->isleaf);
 				n2 = new Node(node->parent, m, M, l, L, node->isleaf);
 				for(int i = 0; i < bestgroup1.size(); i++)
+				{
 					n1->addCF(node->cf[bestgroup1[i]], node->child[bestgroup1[i]]);
+					if (node->child[bestgroup1[i]])
+						node->child[bestgroup1[i]]->parent = n1;
+				}
 				for(int i = 0; i < bestgroup2.size(); i++)
+				{
 					n2->addCF(node->cf[bestgroup2[i]], node->child[bestgroup2[i]]);
+					if (node->child[bestgroup2[i]])
+						node->child[bestgroup2[i]]->parent = n2;
+				}
 				CF *cftodelete = node->parent->cf[parentCFpos];
-				node->parent->cf[parentCFpos] = n1->getCF();
+				node->parent->cf[parentCFpos] = n1->getCF(newtimestamp);
 				node->parent->child[parentCFpos] = n1;
-				node->parent->addCF(n2->getCF(), n2);
+				node->parent->addCF(n2->getCF(newtimestamp), n2);
 				delete cftodelete;
 				delete node;
 			}
 		}
 		
-		bool insert(Point *p, Node *curnode, int whichCFofParent)
+		CF* insert(Point *p, Node *curnode, int whichCFofParent, int newtimestamp)
 		{
 			if (curnode->isleaf)
 			{
-				curnode->addPoint(p);
-				if (needsSplit(curnode))
+				double minimum = curnode->cf[0]->n;
+				int minpos = 0;
+				for(int i = 1; i < curnode->size; i++)
+				{	
+					curnode->cf[i]->update(newtimestamp);
+					if (curnode->cf[i]->n < minimum)
+					{
+						minimum = curnode->cf[i]->n;
+						minpos = i;
+					}
+				}
+				if (minimum < pow(BETA, -LAMBDA * this->deltaT * NUMINSERTS) && curnode->size+1 > M)
 				{
-					split(curnode, whichCFofParent);
-					return true;
+					cout<<minimum<<" is less than "<<pow(BETA, -LAMBDA * this->deltaT * NUMINSERTS)<<"\n";
+					CF *tempcf = curnode->cf[minpos];
+					curnode->cf[minpos] = new CF(p->x, p->y, newtimestamp, 1);
+					return tempcf;
+				}
+				else
+				{
+					curnode->addPoint(p);
+					if (needsSplit(curnode))
+						split(curnode, whichCFofParent, newtimestamp);
+					return NULL;
 				}
 			}
 			else
 			{
 				// Find closest cluster feature to recurse on while not a child
+				for(int i = 0; i < curnode->size; i++)
+					curnode->cf[i]->update(newtimestamp);
 				double mindist = getDistance(p, curnode->cf[0]);
 				int insertpos = 0;
 				for (int i = 1; i < curnode->size; i++)
@@ -282,23 +341,33 @@ class ClusTree
 				curnode->cf[insertpos]->ssy += p->y*p->y;
 				curnode->cf[insertpos]->n += 1;
 
-				if (insert(p, curnode->child[insertpos], insertpos))
+				CF *tempCF = NULL;
+
+				if ((tempCF = insert(p, curnode->child[insertpos], insertpos, newtimestamp)) == NULL)
 				{
 					if (needsSplit(curnode))
-					{
-						split(curnode, whichCFofParent);
-						return true;
-					}
-					return false;
+						split(curnode, whichCFofParent, newtimestamp);
+					return NULL;
 				}
-				return false;
+				else
+				{
+					curnode->cf[insertpos]->lsx -= tempCF->lsx;
+					curnode->cf[insertpos]->lsy -= tempCF->lsy;
+					curnode->cf[insertpos]->ssx -= tempCF->ssx;
+					curnode->cf[insertpos]->ssy -= tempCF->ssy;
+					curnode->cf[insertpos]->n -= tempCF->n;
+					return tempCF;
+				}
 			}
 		}
 
-		void insert(int x, int y, int timestamp)
+		void insert(int x, int y, int newtimestamp)
 		{
+			points++;
 			// TODO: update CF timestamps for features along path
-			Point *p = new Point(x, y, timestamp);
+			this->deltaT = (this->deltaT + newtimestamp - this->lastpointtime)/2;
+			this->lastpointtime = newtimestamp;
+			Point *p = new Point(x, y, newtimestamp);
 			if (root == NULL)
 			{
 				root = new Node(NULL, m, M, l, L, true);
@@ -307,7 +376,12 @@ class ClusTree
 			else
 			{
 				Node *curnode = root;
-				insert(p, curnode, curnode->size);
+				CF *tempCF = insert(p, curnode, curnode->size, newtimestamp);
+				if (tempCF)
+				{
+					points--;
+					delete tempCF;
+				}
 			}
 		}
 
@@ -338,13 +412,24 @@ class ClusTree
 
 int main()
 {
+	srand(time(NULL));
+	timeval t, tstart;
 	ClusTree T(1, 3, 1, 3);
-	int x, y, timestamp;
+	int x, y, timestamp, count = 0;
+	gettimeofday(&tstart, NULL);
+	int usleepamount = 100000;
 	do
 	{
-		cout<<"Enter x,y: ";//,timestamp: ";
-		cin>>x>>y;//>>timestamp;
-		T.insert(x, y, 1);//timestamp);
+		count++;
+		if (count%50 == 0)
+			usleepamount = 50000 + rand()%200000;
+		usleep(usleepamount);
+		cout<<"Enter x,y: ";
+		cin>>x>>y;
+		gettimeofday(&t, NULL);
+		double timestamp = (t.tv_sec - tstart.tv_sec) * 1000 + (((double) (t.tv_usec - tstart.tv_usec)) / 1000);
+		cout<<"Inserting point "<<count<<" with one point every "<<((double) usleepamount)/1000000<<" seconds and "<<points<<" total points\n";
+		T.insert(x, y, timestamp);
 		T.printTree();
 	} while(x != 0);
 	return 0;		
