@@ -14,10 +14,8 @@ using namespace std;
 #define BETA 2
 #define NUMINSERTS 300
 #define MASTER 0
-#define SLAVE1 1
-#define SLAVE2 2
-#define INITIALSIZE 10
-#define UPDATECHECK 30
+#define INITIALSIZE 30
+#define UPDATECHECK 50
 
 int points = 0;
 
@@ -60,6 +58,11 @@ class CF
 			this->ssx = ssx;
 			this->ssy = ssy;
 			this->timestamp = timestamp;
+		}
+		
+		CF()
+		{
+			// Default constructor not used
 		}
 
 		void update(int timestamp)
@@ -440,123 +443,69 @@ int main(int argc, char *argv[])
 	int numTasks;
 	int rank;
 
-	MPI_Status status;
-	
-	MPI::Init();
+	MPI::Init(argc, argv);
 	numTasks = MPI::COMM_WORLD.Get_size();
 	rank = MPI::COMM_WORLD.Get_rank();
 	
 	if (rank == MASTER)
 	{
-		vector<Point> initialPoints;
-		for(int i = 0; i < INITIALSIZE; i++)
+		vector<Point> initialPoints[numTasks+1];
+		double lsx[numTasks+1], lsy[numTasks+1], ssx[numTasks+1], ssy[numTasks+1];
+		for(int j = 1; j < numTasks; j++)
 		{
-			int tempx, tempy;
-			gettimeofday(&t, NULL);
-			cin>>tempx>>tempy;
-			int timestamp = (t.tv_sec - tstart.tv_sec) * 1000 + (((double) (t.tv_usec - tstart.tv_usec)) / 1000);
-			Point p = Point(tempx, tempy, timestamp);
-			initialPoints.push_back(p);
-		}
-
-		bool assigned[INITIALSIZE];
-		memset(assigned, false, sizeof(assigned));
-		assigned[0] = true;
-		int done = 1;
-
-		int startpoint = 0;
-		double largest = 0;
-		for(int i = 0; i < INITIALSIZE; i++)
-		{
-			double curdist = 0;
-			for(int j = 0; j < INITIALSIZE; j++)
-				curdist += distance(initialPoints[i], initialPoints[j], 1);
-			if (curdist > largest)
+			for(int i = 0; i < INITIALSIZE; i++)
 			{
-				largest = curdist;
-				startpoint = i;
-			}
-		}
-
-		Point curcenter = initialPoints[startpoint];
-		while(done < INITIALSIZE/2)
-		{
-			double curmin = distance(initialPoints[1], curcenter, done);
-			int minpos = 1;
-			for(int i = 2; i < INITIALSIZE; i++)
-			{
-				if (distance(initialPoints[i], curcenter, done) < curmin)
-				{
-					curmin = distance(initialPoints[i], curcenter, done);
-					minpos = i;
-				}
-			}
-			assigned[minpos] = true;
-			done++;
-			curcenter = Point(curcenter.x + initialPoints[minpos].x, curcenter.y + initialPoints[minpos].y, 0);
-		}
-		
-		vector<Point> group1, group2;
-		double lsx1, lsx2, lsy1, lsy2, ssx1, ssx2, ssy1, ssy2;
-		for(int i = 0; i < INITIALSIZE; i++)
-		{
-			if(assigned[i])
-			{
-				group1.push_back(initialPoints[i]);
-				lsx1 += initialPoints[i].x;
-				lsy1 += initialPoints[i].y;
-				ssx1 += initialPoints[i].x * initialPoints[i].x;
-				ssy1 += initialPoints[i].y * initialPoints[i].y;
-			}
-			else
-			{
-				group2.push_back(initialPoints[i]);
-				lsx2 += initialPoints[i].x;
-				lsy2 += initialPoints[i].y;
-				ssx2 += initialPoints[i].x * initialPoints[i].x;
-				ssy2 += initialPoints[i].y * initialPoints[i].y;
+				int tempx, tempy;
+				gettimeofday(&t, NULL);
+				cin>>tempx>>tempy;
+				int timestamp = (t.tv_sec - tstart.tv_sec) * 1000 + (((double) (t.tv_usec - tstart.tv_usec)) / 1000);
+				Point p = Point(tempx, tempy, timestamp);
+				initialPoints[j].push_back(p);
+				lsx[j] += tempx;
+				lsy[j] += tempy;
+				ssx[j] += tempx*tempx;
+				ssy[j] += tempy*tempy;
 			}
 		}
 		
 		gettimeofday(&t, NULL);
 		int timestamp = (t.tv_sec - tstart.tv_sec) * 1000 + (((double) (t.tv_usec - tstart.tv_usec)) / 1000);
-		CF root1 = CF(INITIALSIZE/2, lsx1, lsy1, ssx1, ssy1, timestamp);
-		CF root2 = CF(INITIALSIZE/2, lsx2, lsy2, ssx2, ssy2, timestamp);
+		CF roots[numTasks+1];
+		for(int i = 1; i < numTasks; i++)
+			roots[i] = CF(INITIALSIZE, lsx[i], lsy[i], ssx[i], ssy[i], timestamp);
 		
-		int countsent1 = INITIALSIZE/2, countsent2 = INITIALSIZE/2;
+		int countsent[numTasks+1];
+		for(int i = 1; i < numTasks; i++)
+			countsent[i] = INITIALSIZE;
+		double buffer[numTasks+1][20];
 		double buffer1[20], buffer2[20];
-		MPI::Request r1, r2;
+		MPI::Request r[numTasks+1];
 		
 		// Write data to corresponding buffers
-		buffer1[0] = group1[0].x;
-		buffer2[0] = group2[0].x;
-		buffer1[1] = group1[0].y;
-		buffer2[1] = group2[0].y;
-		buffer1[2] = group1[0].timestamp;
-		buffer2[2] = group2[0].timestamp;
-
-		r1 = MPI::COMM_WORLD.Isend(buffer1, 3, MPI::DOUBLE, 1, 0);
-		r2 = MPI::COMM_WORLD.Isend(buffer2, 3, MPI::DOUBLE, 2, 0);
-		for (int i = 1, j = 1; i < group1.size() || j < group2.size(); i++, j++)
+		for(int i = 1; i < numTasks; i++)
 		{
-			if (i < group1.size())
-			{
-				r1.Wait();
-				buffer1[0] = group1[i].x;
-				buffer1[1] = group1[i].y;
-				buffer1[2] = group1[i].timestamp;
-				r1 = MPI::COMM_WORLD.Isend(buffer1, 3, MPI::DOUBLE, 1, 0);
-			}
-			if (j < group2.size())
-			{
-				r2.Wait();
-				buffer2[0] = group2[i].x;
-				buffer2[1] = group2[i].y;
-				buffer2[2] = group2[i].timestamp;
-				r2 = MPI::COMM_WORLD.Isend(buffer2, 3, MPI::DOUBLE, 2, 0);
-			}
+			buffer[i][0] = initialPoints[i][0].x;
+			buffer[i][1] = initialPoints[i][0].y;
 		}
 		
+		for(int i = 1; i < numTasks; i++)
+			r[i] = MPI::COMM_WORLD.Isend(buffer[i], 2, MPI::DOUBLE, i, 0);
+		
+		
+		for(int j = 1; j < INITIALSIZE; j++)
+		{
+			for(int i = 1; i < numTasks; i++)
+			{
+				r[i].Wait();
+				buffer[i][0] = initialPoints[i][j].x;
+				buffer[i][1] = initialPoints[i][j].y;
+				r[i] = MPI::COMM_WORLD.Isend(buffer[i], 2, MPI::DOUBLE, i, 0);
+			}			
+		}
+
+		int starttime;
+		bool first = true;
+		int count = INITIALSIZE * (numTasks-1);
 		do
 		{
 			int x, y;
@@ -565,52 +514,77 @@ int main(int argc, char *argv[])
 				break;
 			gettimeofday(&t, NULL);
 			int timestamp = (t.tv_sec - tstart.tv_sec) * 1000 + (((double) (t.tv_usec - tstart.tv_usec)) / 1000);
+			if (first)
+			{
+				starttime = timestamp;
+				first = false;
+			}
 			Point p(x, y, timestamp);
-			if (countsent1 == UPDATECHECK)
+			for(int i = 1; i < numTasks; i++)
 			{
-				r1.Wait();
-				MPI::COMM_WORLD.Recv(buffer1, 5, MPI::DOUBLE, 1, 0);
-				root1 = CF(buffer1[0], buffer1[1], buffer1[2], buffer1[3], buffer1[4], timestamp); 
+				if (countsent[i] == UPDATECHECK)
+				{
+					r[i].Wait();
+					MPI::COMM_WORLD.Recv(buffer[i], 5, MPI::DOUBLE, i, 0);
+					roots[i] = CF(buffer[i][0], buffer[i][1], buffer[i][2], buffer[i][3], buffer[i][4], timestamp);
+					countsent[i] = 0;
+				}
 			}
-			if (countsent2 == UPDATECHECK)
+			int minindex = 1;
+			double mindist = distance(p, roots[1]);
+			for(int i = 2; i < numTasks; i++)
 			{
-				r2.Wait();
-				MPI::COMM_WORLD.Recv(buffer2, 5, MPI::DOUBLE, 2, 0);
-				root2 = CF(buffer2[0], buffer2[1], buffer2[2], buffer2[3], buffer2[4], timestamp);
+				if(distance(p, roots[i]) < mindist)
+				{
+					minindex = i;
+					mindist = distance(p, roots[i]);
+				}
 			}
-			if (distance(p, root1) < distance(p, root2))
-			{
-				r1.Wait();
-				buffer1[0] = p.x;
-				buffer1[1] = p.y;
-				buffer1[2] = p.timestamp;
-				r1 = MPI::COMM_WORLD.Isend(buffer1, 3, MPI::DOUBLE, 1, 0);
-			}
-			else
-			{
-				r2.Wait();
-				buffer2[0] = p.x;
-				buffer2[1] = p.y;
-				buffer2[2] = p.timestamp;
-				r2 = MPI::COMM_WORLD.Isend(buffer2, 3, MPI::DOUBLE, 2, 0);
-			}
+			r[minindex].Wait();
+			buffer[minindex][0] = p.x;
+			buffer[minindex][1] = p.y;
+			r[minindex] = MPI::COMM_WORLD.Isend(buffer[minindex], 2, MPI::DOUBLE, minindex, 0);
+			countsent[minindex]++;
+
 		} while(true);
 		
+		double tempbuffers[numTasks+1][50];
+		for(int i = 1; i < numTasks; i++)
+		{
+			if (countsent[i] == UPDATECHECK)
+				MPI::COMM_WORLD.Recv(tempbuffers[i], 5, MPI::DOUBLE, i, 0);
+		}
+
+		buffer[0][0] = -999999;
+		buffer[0][1] = -999999;
+		buffer[0][2] = -999999;
+		for(int i = 1; i < numTasks; i++)
+			MPI::COMM_WORLD.Send(buffer[0], 2, MPI::DOUBLE, i, 0);
+
+		//gettimeofday(&t, NULL);
+		//timestamp = (t.tv_sec - tstart.tv_sec) * 1000 + (((double) (t.tv_usec - tstart.tv_usec)) / 1000);
+		//int endtime = timestamp;
+		//cout<<endtime - starttime<<"\n";
 		// End master node's work
 	}
-	else if (rank == SLAVE1)
+	else 
 	{
 		double buffer[20];
-		int countreceived = 5;
+		int countreceived = 0;
 		ClusTree T(1, 3, 1, 3);
 		do
 		{
-			MPI::COMM_WORLD.Recv(buffer, 3, MPI::DOUBLE, 0, 0);
-			double x = buffer[0], y = buffer[1], timestamp = buffer[2];
-			cout<<"Slave 1 received "<<x<<" "<<y<<" "<<timestamp<<"\n";
+			//cout<<rank<<"\n";
+			MPI::COMM_WORLD.Recv(buffer, 2, MPI::DOUBLE, 0, 0);
+			double x = buffer[0], y = buffer[1];
+			//cout<<"Slave "<<rank<<" received "<<x<<" "<<y<<" "<<timestamp<<"\n";
+			if (x < -99999)
+				break;
+			gettimeofday(&t, NULL);
+			int timestamp = (t.tv_sec - tstart.tv_sec) * 1000 + (((double) (t.tv_usec - tstart.tv_usec)) / 1000);
 			T.insert(x, y, timestamp);
 			countreceived++;
-			if (countreceived == UPDATECHECK)
+			if (countreceived == UPDATECHECK - 1)
 			{
 				countreceived = 0;
 				CF *tempCF = T.getRootCF();
@@ -620,41 +594,14 @@ int main(int argc, char *argv[])
 				buffer[3] = tempCF->ssx;
 				buffer[4] = tempCF->ssy;
 				delete tempCF;
-				MPI::COMM_WORLD.Send(buffer, 5, MPI::DOUBLE, 0, 1);
+				MPI::COMM_WORLD.Send(buffer, 5, MPI::DOUBLE, 0, 0);
 			}
 		} while (true);
 
-		// End slave 1 code
+		cout<<points<<"\n";
+		// End slave code
 	}
-	else if (rank == SLAVE2)
-	{
-		double buffer[20];
-		int countreceived = 5;
-		ClusTree T(1, 3, 1, 3);
-		do
-		{
-			MPI::COMM_WORLD.Recv(buffer, 3, MPI::DOUBLE, 0, 0);
-			double x = buffer[0], y = buffer[1], timestamp = buffer[2];
-			cout<<"Slave 2 received "<<x<<" "<<y<<" "<<timestamp<<"\n";
-			T.insert(x, y, timestamp);
-			countreceived++;
-			if (countreceived == UPDATECHECK)
-			{
-				countreceived = 0;
-				CF *tempCF = T.getRootCF();
-				buffer[0] = tempCF->n;
-				buffer[1] = tempCF->lsx;
-				buffer[2] = tempCF->lsy;
-				buffer[3] = tempCF->ssx;
-				buffer[4] = tempCF->ssy;
-				delete tempCF;
-				MPI::COMM_WORLD.Send(buffer, 5, MPI::DOUBLE, 0, 2);
-			}
-		} while (true);
-
-		// End slave 2 code
-	}
-
+	
 	MPI::Finalize();
 	return 0;		
 }
