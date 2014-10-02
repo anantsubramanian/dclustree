@@ -2,6 +2,7 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <queue>
 #include <cstring>
 #include <sys/time.h>
 #include <unistd.h>
@@ -16,7 +17,9 @@ using namespace std;
 #define MASTER 0
 #define INITIALSIZE 30
 #define UPDATECHECK 50
+#define SENTINEL -99999
 
+typedef pair<int, int> II;
 int points = 0;
 
 class Point
@@ -139,6 +142,8 @@ class Node
 		}
 
 };
+
+typedef pair<Node*, int> NI;
 
 class ClusTree
 {
@@ -418,10 +423,83 @@ class ClusTree
 			printTree(this->root, 0);	
 		}
 
+		void printPoints(Node *node)
+		{
+			if(node->isleaf)
+			{
+				for(int i = 0; i < node->size; i++)
+					cout<<(node->cf[i]->lsx)/(node->cf[i]->n)<<" "<<(node->cf[i]->lsy)/(node->cf[i]->n)<<"\n";
+			}
+			else
+			{
+				for(int i = 0; i < node->size; i++)
+					printPoints(node->child[i]);
+			}
+		}
+
+		void printAllPoints()
+		{
+			printPoints(this->root);		
+		}
+
 		CF* getRootCF()
 		{
 			return this->root->getCF(this->lastpointtime);
 		}
+
+		vector<Node*> getNodes(int reqno)
+		{
+			vector<Node*> curnodes;
+			int prevdepth = 0;
+			queue<NI> Q;
+			Q.push(NI(this->root, 0));
+			while(!Q.empty())
+			{
+				NI temp = Q.front();
+				Q.pop();
+				int curdepth = temp.second;
+				Node *curnode = temp.first;
+				if (curdepth > prevdepth && curnodes.size() >= reqno)
+					return curnodes;
+				else if (curdepth > prevdepth && curnode->isleaf)
+					return curnodes;
+				else if (curdepth > prevdepth && !curnode->isleaf)
+				{
+					prevdepth = curdepth;
+					curnodes.clear();
+				}
+				curnodes.push_back(curnode);
+				for(int i = 0; i < curnode->size; i++)
+				{
+					if (curnode->child[i] != NULL)
+						Q.push(NI(curnode->child[i], curdepth+1));
+				}
+			}
+			return curnodes;
+		}
+
+		void populateDescendants(Node *node, vector<II> &result)
+		{
+			if (node->isleaf)
+			{
+				for(int i = 0; i < node->size; i++)
+					result.push_back(II((node->cf[i]->lsx) / (node->cf[i]->n), (node->cf[i]->lsy) / (node->cf[i]->n)));
+			}
+			else
+			{
+				for(int i = 0; i < node->size; i++)
+					if(node->child[i] != NULL)
+						populateDescendants(node->child[i], result);
+			}
+		}
+
+		vector<II> getDescendantPoints(Node *node)
+		{
+			vector<II> result;
+			populateDescendants(node, result);
+			return result;
+		}
+
 };
 
 double distance(Point p1, Point cluster, int done)
@@ -432,6 +510,23 @@ double distance(Point p1, Point cluster, int done)
 double distance(Point p, CF cf)
 {
 	return sqrt(pow(p.x - cf.lsx/cf.n, 2) + pow(p.y - cf.lsy/cf.n, 2));
+}
+
+int pathcompress(int *heads, int i)
+{
+	if (heads[i] == i)
+		return i;
+	else return heads[i] = pathcompress(heads, heads[heads[i]]);
+}
+
+double distance(int lsx1, int lsy1, int n1, int lsx2, int lsy2, int n2)
+{
+	return sqrt(pow(((double)lsx1)/n1 - ((double)lsx2)/n2, 2) + pow(((double)lsx1)/n1 - ((double)lsx2)/n2,2));
+}
+
+double sqrdistance(double x1, double y1, double x2, double y2)
+{
+	return ((x1-x2)*(x1-x2) + (y1-y2)*(y1-y2));
 }
 
 int main(int argc, char *argv[])
@@ -506,12 +601,16 @@ int main(int argc, char *argv[])
 		int starttime;
 		bool first = true;
 		int count = INITIALSIZE * (numTasks-1);
+		int numclusters;
 		do
 		{
 			int x, y;
 			cin>>x>>y;
-			if (cin.eof())
+			if (x == SENTINEL)
+			{
+				numclusters = y;
 				break;
+			}
 			gettimeofday(&t, NULL);
 			int timestamp = (t.tv_sec - tstart.tv_sec) * 1000 + (((double) (t.tv_usec - tstart.tv_usec)) / 1000);
 			if (first)
@@ -555,11 +654,146 @@ int main(int argc, char *argv[])
 				MPI::COMM_WORLD.Recv(tempbuffers[i], 5, MPI::DOUBLE, i, 0);
 		}
 
-		buffer[0][0] = -999999;
-		buffer[0][1] = -999999;
-		buffer[0][2] = -999999;
+		buffer[0][0] = SENTINEL;
+		buffer[0][1] = SENTINEL;
+		buffer[0][2] = SENTINEL;
 		for(int i = 1; i < numTasks; i++)
 			MPI::COMM_WORLD.Send(buffer[0], 2, MPI::DOUBLE, i, 0);
+		
+		// Request Clustering
+		int torequest = (int) ceil(numclusters / numTasks);
+		int tempbuffer[10];
+		tempbuffer[0] = torequest;
+		int numofclusters[numTasks+1];
+		for(int i = 1; i < numTasks; i++)
+		{
+			MPI::COMM_WORLD.Send(tempbuffer, 1, MPI::INT, i, 0);
+			MPI::COMM_WORLD.Recv(tempbuffer, 1, MPI::INT, i, 0);
+			numofclusters[i] = tempbuffer[0];
+		}
+		int totalclusters = 0;
+		for(int i = 1; i < numTasks; i++)
+			totalclusters += numofclusters[i];
+
+		vector<II> clusters[totalclusters];
+		int curcluster = 0;
+
+		for(int i = 1; i < numTasks; i++)
+		{
+			for(int j = 0; j < numofclusters[i]; j++)
+			{
+				tempbuffer[0] = j;
+				MPI::COMM_WORLD.Send(tempbuffer, 1, MPI::INT, i, 0);
+				MPI::COMM_WORLD.Recv(tempbuffer, 2, MPI::INT, i, 0);
+				int numpoints = tempbuffer[1];
+				for(int k = 0; k < numpoints; k++)
+				{
+					MPI::COMM_WORLD.Recv(tempbuffer, 2, MPI::INT, i, 0);
+					clusters[curcluster].push_back(II(tempbuffer[0], tempbuffer[1]));
+				}
+				curcluster++;
+			}
+		}
+		
+		// Received all clusters at this point
+		// Should merge till we have required number of clusters.
+
+		int heads[totalclusters];
+		int lsxs[totalclusters], lsys[totalclusters], pointcounts[totalclusters];
+
+		for(int i = 0; i < totalclusters; i++)
+		{
+			heads[i] = i;
+			pointcounts[i] = clusters[i].size();
+			int lx = 0, ly = 0; 
+			for(int j = 0; j < clusters[i].size(); j++)
+			{
+				lx += clusters[i][j].first;
+				ly += clusters[i][j].second;
+			}
+			lsxs[i] = lx;
+			lsys[i] = ly;
+		}
+		
+		int clustercount = totalclusters;
+		while(clustercount > numclusters)
+		{
+			int mini, minj;
+			double mindist;
+			bool first = true;
+			for(int i = 0; i < totalclusters; i++)
+			{
+				heads[i] = pathcompress(heads, heads[i]);
+				for(int j = i+1; j < totalclusters; j++)
+				{
+					heads[j] = pathcompress(heads, heads[j]);
+					if (heads[i] == heads[j]) continue;
+					if (first)
+					{
+						first = false;
+						mini = i;
+						minj = j;
+						mindist = distance(lsxs[heads[i]], lsys[heads[i]], pointcounts[heads[i]], lsxs[heads[j]], lsys[heads[j]], pointcounts[heads[j]]);
+					}
+					else if (distance(lsxs[heads[i]], lsys[heads[i]], pointcounts[heads[i]], lsxs[heads[j]], lsys[heads[j]], pointcounts[heads[j]]) < mindist)
+					{
+						mindist = distance(lsxs[heads[i]], lsys[heads[i]], pointcounts[heads[i]], lsxs[heads[j]], lsys[heads[j]], pointcounts[heads[j]]);
+						mini = i;
+						minj = j;
+					}
+				}
+			}
+			
+			// mini and minj are the clusters to be merged based on Euclidean distance
+			pointcounts[heads[mini]] += pointcounts[heads[minj]];
+			lsxs[heads[mini]] += lsxs[heads[minj]];
+			lsys[heads[mini]] += lsys[heads[minj]];
+			heads[heads[minj]] = heads[mini];
+			heads[minj] = pathcompress(heads, heads[minj]);
+			clustercount--;
+		}
+
+		int newclustersnums[totalclusters];
+		int newnum = 1;
+		for(int i = 0; i < totalclusters; i++)
+			newclustersnums[i] = -1;
+		
+		for(int i = 0; i < totalclusters; i++)
+			if (newclustersnums[heads[i]] == -1)
+				newclustersnums[heads[i]] = newnum++;
+		
+		/*for(int i = 0; i < totalclusters; i++)
+			for(int j = 0; j < clusters[i].size(); j++)
+				cout<<clusters[i][j].first<<" "<<clusters[i][j].second<<" "<<newclustersnums[heads[i]]<<"\n"; */
+
+		double sse = 0.0;
+		double centerx[newnum], centery[newnum];
+		int clusterns[newnum];
+		for(int i = 0; i < newnum; i++)
+		{
+			centerx[i] = centery[i] = 0.0;
+			clusterns[i] = 0;
+		}
+		for(int i = 0; i < totalclusters; i++)
+		{
+			for(int j = 0; j < clusters[i].size(); j++)
+			{	
+				centerx[newclustersnums[heads[i]]] += clusters[i][j].first;
+				centery[newclustersnums[heads[i]]] += clusters[i][j].second;
+				clusterns[newclustersnums[heads[i]]]++;
+			}
+		}
+		for(int i = 1; i < newnum; i++)
+		{
+			centerx[i] /= clusterns[i];
+			centery[i] /= clusterns[i];
+		}
+
+		for(int i = 0; i < totalclusters; i++)
+			for(int j = 0; j < clusters[i].size(); j++)
+				sse += sqrdistance(clusters[i][j].first, centerx[newclustersnums[heads[i]]], clusters[i][j].second, centery[newclustersnums[heads[i]]]);
+
+		cout<<fixed<<sse;
 
 		//gettimeofday(&t, NULL);
 		//timestamp = (t.tv_sec - tstart.tv_sec) * 1000 + (((double) (t.tv_usec - tstart.tv_usec)) / 1000);
@@ -578,7 +812,7 @@ int main(int argc, char *argv[])
 			MPI::COMM_WORLD.Recv(buffer, 2, MPI::DOUBLE, 0, 0);
 			double x = buffer[0], y = buffer[1];
 			//cout<<"Slave "<<rank<<" received "<<x<<" "<<y<<" "<<timestamp<<"\n";
-			if (x < -99999)
+			if (x < (SENTINEL+100))
 				break;
 			gettimeofday(&t, NULL);
 			int timestamp = (t.tv_sec - tstart.tv_sec) * 1000 + (((double) (t.tv_usec - tstart.tv_usec)) / 1000);
@@ -597,8 +831,33 @@ int main(int argc, char *argv[])
 				MPI::COMM_WORLD.Send(buffer, 5, MPI::DOUBLE, 0, 0);
 			}
 		} while (true);
+		
+		int tempbuffer[10];
+		MPI::COMM_WORLD.Recv(tempbuffer, 1, MPI::INT, 0, 0);
+		int numclusters = tempbuffer[0];
+		
+		vector<Node*> nodes = T.getNodes(numclusters);
+		vector<II> clusters[nodes.size()];
+		for(int i = 0; i < nodes.size(); i++)
+			clusters[i] = T.getDescendantPoints(nodes[i]);
+		
+		tempbuffer[0] = nodes.size();
+		MPI::COMM_WORLD.Send(tempbuffer, 1, MPI::INT, 0, 0);
 
-		cout<<points<<"\n";
+		for(int i = 0; i < nodes.size(); i++)
+		{
+			MPI::COMM_WORLD.Recv(tempbuffer, 1, MPI::INT, 0, 0);
+			tempbuffer[1] = clusters[tempbuffer[0]].size();
+			MPI::COMM_WORLD.Send(tempbuffer, 2, MPI::INT, 0, 0);
+			int clusternum = tempbuffer[0];
+			for(int j = 0; j < clusters[clusternum].size(); j++)
+			{
+				tempbuffer[0] = clusters[clusternum][j].first;
+				tempbuffer[1] = clusters[clusternum][j].second;
+				MPI::COMM_WORLD.Send(tempbuffer, 2, MPI::INT, 0, 0);
+			}
+		}
+
 		// End slave code
 	}
 	

@@ -2,6 +2,7 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <queue>
 #include <sys/time.h>
 #include <unistd.h>
 #include <cstdlib>
@@ -11,6 +12,9 @@ using namespace std;
 #define LAMBDA 0.00001
 #define BETA 2
 #define NUMINSERTS 300
+#define SENTINEL -99999
+
+typedef pair<int, int> II;
 
 int points = 0;
 
@@ -130,6 +134,8 @@ class Node
 		}
 
 };
+
+typedef pair<Node*, int> NI;
 
 class ClusTree
 {
@@ -407,7 +413,77 @@ class ClusTree
 		{
 			printTree(this->root, 0);	
 		}
+		
+		vector<Node*> getNodes(int reqno)
+		{
+			vector<Node*> curnodes;
+			int prevdepth = 0;
+			queue<NI> Q;
+			Q.push(NI(this->root, 0));
+			while(!Q.empty())
+			{
+				NI temp = Q.front();
+				Q.pop();
+				int curdepth = temp.second;
+				Node *curnode = temp.first;
+				if (curdepth > prevdepth && curnodes.size() >= reqno)
+					return curnodes;
+				else if (curdepth > prevdepth && curnode->isleaf)
+					return curnodes;
+				else if (curdepth > prevdepth && !curnode->isleaf)
+				{
+					prevdepth = curdepth;
+					curnodes.clear();
+				}
+				curnodes.push_back(curnode);
+				for(int i = 0; i < curnode->size; i++)
+				{
+					if (curnode->child[i] != NULL)
+						Q.push(NI(curnode->child[i], curdepth+1));
+				}
+			}
+			return curnodes;
+		}
+
+		void populateDescendants(Node *node, vector<II> &result)
+		{
+			if (node->isleaf)
+			{
+				for(int i = 0; i < node->size; i++)
+					result.push_back(II((node->cf[i]->lsx) / (node->cf[i]->n), (node->cf[i]->lsy) / (node->cf[i]->n)));
+			}
+			else
+			{
+				for(int i = 0; i < node->size; i++)
+					if(node->child[i] != NULL)
+						populateDescendants(node->child[i], result);
+			}
+		}
+
+		vector<II> getDescendantPoints(Node *node)
+		{
+			vector<II> result;
+			populateDescendants(node, result);
+			return result;
+		}
 };
+
+int pathcompress(int *heads, int i)
+{
+	if (heads[i] == i)
+		return i;
+	else return heads[i] = pathcompress(heads, heads[heads[i]]);
+}
+
+double distance(int lsx1, int lsy1, int n1, int lsx2, int lsy2, int n2)
+{
+	return sqrt(pow(((double)lsx1)/n1 - ((double)lsx2)/n2, 2) + pow(((double)lsx1)/n1 - ((double)lsx2)/n2,2));
+}
+
+double sqrdistance(double x1, double y1, double x2, double y2)
+{
+	return ((x1-x2)*(x1-x2) + (y1-y2)*(y1-y2));
+}
 
 int main()
 {
@@ -418,11 +494,15 @@ int main()
 	gettimeofday(&tstart, NULL);
 	int starttime, endtime;
 	bool first = true;
+	int numclusters;
 	do
 	{
 		cin>>x>>y;
-		if (cin.eof())
+		if (x == SENTINEL)
+		{
+			numclusters = y;
 			break;
+		}
 		gettimeofday(&t, NULL);
 		int timestamp = (t.tv_sec - tstart.tv_sec) * 1000 + (((double) (t.tv_usec - tstart.tv_usec)) / 1000);
 		if (first)
@@ -434,7 +514,115 @@ int main()
 		points++;
 		//cout<<points<<"\n";
 	} while(true);
-	cout<<points<<"\n";
+	//cout<<points<<"\n";
+	
+	vector<Node*> nodes = T.getNodes(numclusters);
+	vector<II> clusters[nodes.size()];
+	for(int i = 0; i < nodes.size(); i++)
+		clusters[i] = T.getDescendantPoints(nodes[i]);
+	
+	int totalclusters = nodes.size();
+
+	// Should merge till we have required number of clusters.
+
+	int heads[totalclusters];
+	int lsxs[totalclusters], lsys[totalclusters], pointcounts[totalclusters];
+
+	for(int i = 0; i < totalclusters; i++)
+	{
+		heads[i] = i;
+		pointcounts[i] = clusters[i].size();
+		int lx = 0, ly = 0; 
+		for(int j = 0; j < clusters[i].size(); j++)
+		{
+			lx += clusters[i][j].first;
+			ly += clusters[i][j].second;
+		}
+		lsxs[i] = lx;
+		lsys[i] = ly;
+	}
+	
+	int clustercount = totalclusters;
+	while(clustercount > numclusters)
+	{
+		int mini, minj;
+		double mindist;
+		bool first = true;
+		for(int i = 0; i < totalclusters; i++)
+		{
+			heads[i] = pathcompress(heads, heads[i]);
+			for(int j = i+1; j < totalclusters; j++)
+			{
+				heads[j] = pathcompress(heads, heads[j]);
+				if (heads[i] == heads[j]) continue;
+				if (first)
+				{
+					first = false;
+					mini = i;
+					minj = j;
+					mindist = distance(lsxs[heads[i]], lsys[heads[i]], pointcounts[heads[i]], lsxs[heads[j]], lsys[heads[j]], pointcounts[heads[j]]);
+				}
+				else if (distance(lsxs[heads[i]], lsys[heads[i]], pointcounts[heads[i]], lsxs[heads[j]], lsys[heads[j]], pointcounts[heads[j]]) < mindist)
+				{
+					mindist = distance(lsxs[heads[i]], lsys[heads[i]], pointcounts[heads[i]], lsxs[heads[j]], lsys[heads[j]], pointcounts[heads[j]]);
+					mini = i;
+					minj = j;
+				}
+			}
+		}
+		
+		// mini and minj are the clusters to be merged based on Euclidean distance
+		pointcounts[heads[mini]] += pointcounts[heads[minj]];
+		lsxs[heads[mini]] += lsxs[heads[minj]];
+		lsys[heads[mini]] += lsys[heads[minj]];
+		heads[heads[minj]] = heads[mini];
+		heads[minj] = pathcompress(heads, heads[minj]);
+		clustercount--;
+	}
+
+	int newclustersnums[totalclusters];
+	int newnum = 1;
+	for(int i = 0; i < totalclusters; i++)
+		newclustersnums[i] = -1;
+	
+	for(int i = 0; i < totalclusters; i++)
+		if (newclustersnums[heads[i]] == -1)
+			newclustersnums[heads[i]] = newnum++;
+
+	/*for(int i = 0; i < totalclusters; i++)
+		for(int j = 0; j < clusters[i].size(); j++)
+			cout<<clusters[i][j].first<<" "<<clusters[i][j].second<<" "<<newclustersnums[heads[i]]<<"\n";*/
+
+
+	double sse = 0.0;
+	double centerx[newnum], centery[newnum];
+	int clusterns[newnum];
+	for(int i = 0; i < newnum; i++)
+	{
+		centerx[i] = centery[i] = 0.0;
+		clusterns[i] = 0;
+	}
+	for(int i = 0; i < totalclusters; i++)
+	{
+		for(int j = 0; j < clusters[i].size(); j++)
+		{	
+			centerx[newclustersnums[heads[i]]] += clusters[i][j].first;
+			centery[newclustersnums[heads[i]]] += clusters[i][j].second;
+			clusterns[newclustersnums[heads[i]]]++;
+		}
+	}
+	for(int i = 1; i < newnum; i++)
+	{
+		centerx[i] /= clusterns[i];
+		centery[i] /= clusterns[i];
+	}
+
+	for(int i = 0; i < totalclusters; i++)
+		for(int j = 0; j < clusters[i].size(); j++)
+			sse += sqrdistance(clusters[i][j].first, centerx[newclustersnums[heads[i]]], clusters[i][j].second, centery[newclustersnums[heads[i]]]);
+
+	cout<<fixed<<sse;
+	
 	//gettimeofday(&t, NULL);
 	//timestamp = (t.tv_sec - tstart.tv_sec) * 1000 + (((double) (t.tv_usec - tstart.tv_usec)) / 1000);
 	//endtime = timestamp;
