@@ -584,7 +584,7 @@ int main(int argc, char *argv[])
 			int timestamp = (t.tv_sec - tstart.tv_sec) * 1000 + (((double) (t.tv_usec - tstart.tv_usec)) / 1000);
 			T.insert(x, y, timestamp);
 			countreceived++;
-			if (countreceived == UPDATECHECK - 1)
+			if (countreceived == UPDATECHECK)
 			{
 				countreceived = 0;
 				CF *tempCF = T.getRootCF();

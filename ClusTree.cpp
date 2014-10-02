@@ -304,7 +304,7 @@ class ClusTree
 				}
 				if (minimum < pow(BETA, -LAMBDA * this->deltaT * NUMINSERTS) && curnode->size+1 > M)
 				{
-					cout<<minimum<<" is less than "<<pow(BETA, -LAMBDA * this->deltaT * NUMINSERTS)<<"\n";
+					//cout<<minimum<<" is less than "<<pow(BETA, -LAMBDA * this->deltaT * NUMINSERTS)<<"\n";
 					CF *tempcf = curnode->cf[minpos];
 					curnode->cf[minpos] = new CF(p->x, p->y, newtimestamp, 1);
 					return tempcf;
@@ -363,7 +363,6 @@ class ClusTree
 
 		void insert(int x, int y, int newtimestamp)
 		{
-			points++;
 			// TODO: update CF timestamps for features along path
 			this->deltaT = (this->deltaT + newtimestamp - this->lastpointtime)/2;
 			this->lastpointtime = newtimestamp;
@@ -417,20 +416,28 @@ int main()
 	ClusTree T(1, 3, 1, 3);
 	int x, y, timestamp, count = 0;
 	gettimeofday(&tstart, NULL);
-	int usleepamount = 100000;
+	int starttime, endtime;
+	bool first = true;
 	do
 	{
-		count++;
-		if (count%50 == 0)
-			usleepamount = 50000 + rand()%200000;
-		usleep(usleepamount);
-		cout<<"Enter x,y: ";
 		cin>>x>>y;
+		if (cin.eof())
+			break;
 		gettimeofday(&t, NULL);
-		double timestamp = (t.tv_sec - tstart.tv_sec) * 1000 + (((double) (t.tv_usec - tstart.tv_usec)) / 1000);
-		cout<<"Inserting point "<<count<<" with one point every "<<((double) usleepamount)/1000000<<" seconds and "<<points<<" total points\n";
+		int timestamp = (t.tv_sec - tstart.tv_sec) * 1000 + (((double) (t.tv_usec - tstart.tv_usec)) / 1000);
+		if (first)
+		{
+			first = false;
+			starttime = timestamp;
+		}
 		T.insert(x, y, timestamp);
-		T.printTree();
-	} while(x != 0);
+		points++;
+		//cout<<points<<"\n";
+	} while(true);
+	cout<<points<<"\n";
+	//gettimeofday(&t, NULL);
+	//timestamp = (t.tv_sec - tstart.tv_sec) * 1000 + (((double) (t.tv_usec - tstart.tv_usec)) / 1000);
+	//endtime = timestamp;
+	//cout<<endtime - starttime<<"\n";
 	return 0;		
 }
